@@ -59,5 +59,19 @@ We provide three examples for performing optimization with AdaNS in `main_Gaussi
 		parser.add_argument('--mutate_scale', default=0.2, type=float, help='std of the noise added during mutation (default: 0.2)')
 		```
 	
+## Reference:
+If you use this project please cite our work:
 
+```
+@article{javaheripi2020adans,
+  title={AdaNS: Adaptive Non-Uniform Sampling for Automated Design of Compact DNNs},
+  author={Javaheripi, Mojan and Samragh, Mohammad and Javidi, Tara and Koushanfar, Farinaz},
+  journal={IEEE Journal of Selected Topics in Signal Processing},
+  volume={14},
+  number={4},
+  pages={750--764},
+  year={2020},
+  publisher={IEEE}
+}
+```
 
