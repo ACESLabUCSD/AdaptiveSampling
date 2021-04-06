@@ -18,8 +18,8 @@ We provide three examples for performing optimization with AdaNS in `main_Gaussi
     ```
     
     where `x` is a vector of design hyperparameters to be optimized, and `f` is the value of the objective function evaluated at x. You can also choose from a set of example objective functions provided in `utils/example_functions.py`.
+    
    - The rest of the arguments used by the three optimization tools are as follows: 
- 
 
 		```
 		#------------- Sampler parameters
@@ -37,7 +37,8 @@ We provide three examples for performing optimization with AdaNS in `main_Gaussi
 		parser.add_argument('--alpha_max', default=1.0, type=float, help='alpha_max parameter (default:1.0)')
 		parser.add_argument('--early_stopping', default=1000, type=int, help='number of iterations without improvement to activate early stopping (default: 1000)')
 		```
-	- Arguments specifically used by `main_Gaussian.py` are as follows: 
+	
+   - Arguments specifically used by `main_Gaussian.py` are as follows: 
 	
 		```
 		#-------------- Gaussian Sampler parameters
@@ -46,7 +47,8 @@ We provide three examples for performing optimization with AdaNS in `main_Gaussi
 		parser.add_argument('--cross_portion', default=0.4, type=float, help='portion of samples to take from gaussians using the Cross method (default:0.4)')
 		parser.add_argument('--pair_selection', default='top_and_random', type=str, help='how to select sample pairs for crossing, choose from [random,top_scores,top_and_nearest,top_and_furthest,top_and_random] (default:top_and_random)')
 		```
-	- Arguments specifically used by `main_Genetic.py` are as follows: 
+
+   - Arguments specifically used by `main_Genetic.py` are as follows: 
 	
 		```
 		#-------------- Genetic Sampler parameters
