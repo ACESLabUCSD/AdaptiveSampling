@@ -21,7 +21,7 @@ We provide three examples for performing optimization with AdaNS in `main_Gaussi
 
    - The rest of the arguments used by the three optimization tools are as follows: 
 
-		```
+		```python
 		#------------- Sampler parameters
 		parser.add_argument('--name', default='test_fn_0', help='experiment name, used to specify the folder to save sampling results (default: test_fn_0)')
 		parser.add_argument('--minimize', action='store_true', help='if selected,the function will be minimized, otherwise maximized')
@@ -40,7 +40,7 @@ We provide three examples for performing optimization with AdaNS in `main_Gaussi
 	
    - Arguments specifically used by `main_Gaussian.py` are as follows: 
 	
-		```
+		```python
 		#-------------- Gaussian Sampler parameters
 		parser.add_argument('--u_random_portion', default=0.2, type=float,help='portion of samples to take unifromly random from the entire space (default:0.2)') 
 		parser.add_argument('--local_portion', default=0.4, type=float, help='portion of samples to take from gaussians using the Local method (default:0.4)')
