@@ -50,7 +50,7 @@ We provide three examples for performing optimization with AdaNS in `main_Gaussi
 
    - Arguments specifically used by `main_Genetic.py` are as follows: 
 	
-		```
+		```python
 		#-------------- Genetic Sampler parameters
 		parser.add_argument('--p_cross', default=0.8, type=float, help='probability of crossover (default: 0.8)')
 		parser.add_argument('--p_swap', default=0.2, type=float,help='per-bit exchange probability (default: 0.2)')
