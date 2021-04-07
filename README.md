@@ -1,7 +1,11 @@
 # Adaptive Sampling for Black-box Optimization 
 
 Official Github repo for the three black-box optimization methods described in “[AdaNS: Adaptive Non-Uniform Sampling for Automated Design of Compact DNNs](https://ieeexplore.ieee.org/document/9086078)” published in the IEEE Journal of Special Topics in Signal Processing.  
-Each optimization tool in this library can be used to search for the global maxima or global minima of an expensive black-box function (e.g. optimal hyperparameters for simulation, neural network compression).  
+Each optimization tool in this library can be used to search for the global maxima or global minima of an expensive black-box function (e.g. optimal hyperparameters for simulation, neural network compression). Here is an example:
+
+![image info](./images/samples.png)
+
+
 User selects the desired black-box optimization tool to use, provides an objective function, the search domain (valid ranges of each hyperparameter) and the corresponding parameters for the optimization tool. The library then optimizes the provided objective function and returns the optimal set of hyperparameters.
 
 ## Performing Optimization:
