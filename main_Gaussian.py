@@ -72,6 +72,8 @@ def get_run_config():
 								help='if selected, the sampler will save contours of the objective function along with per-iteration samples')
 	parser.add_argument('--seed', default=0, type=int,
 								help='random seed (default: 0)')
+	parser.add_argument('--no-verbose', action='store_true',
+								help='if selected, the optimization will not print out intermediate states')
 	
 	#------------- Sampler parameters
 	parser.add_argument('--num_samples', default=50, type=int,
@@ -116,7 +118,7 @@ def main():
 	# determining the search-space boundaries
 	if len(args.path_to_boundaries)==0:
 		assert args.dim is not None, 'Please either provide the search-space boundaries or the dimensionality of the search-space'
-		boundaries = [[0, 1] for _ in range(args.dim)]
+		boundaries = np.asarray([[0, 1] for _ in range(args.dim)])
 		print('=> no boundaries provided, setting default to [0, 1] for all dimensions')
 	else:
 		boundaries = np.genfromtxt(args.path_to_boundaries, delimiter=',')
@@ -135,7 +137,8 @@ def main():
 	
 	print('=> Starting optimization')
 	best_sample = sampler.run_sampling(evaluator, args.num_samples, args.n_iter, args.minimize, args.alpha_max, early_stopping=args.early_stopping, 
-										save_path=args.save_path, n_parallel=args.n_parallel, plot_contour=args.plot_contour, executor=mp.Pool)
+										save_path=args.save_path, n_parallel=args.n_parallel, plot_contour=args.plot_contour, 
+										executor=mp.Pool, verbose=not(args.no_verbose))
 	print('=> optimal hyperparameters:', best_sample)
 
 

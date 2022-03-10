@@ -50,7 +50,7 @@ class AdaNS_sampler(object):
 		
 		# shape of boundaries: <d, 2>. Specifies the minimum and maximum allowed value of the hyperparameter per dimension.
 		self.boundaries = boundaries
-		self.dimensions = len(boundaries) 
+		self.dimensions = len(boundaries)
 		
 		self.all_samples = np.zeros((0, self.dimensions))
 		self.all_scores = np.zeros(0)
@@ -69,6 +69,11 @@ class AdaNS_sampler(object):
 		'''
 		if num_samples>0:
 			sample_vectors = np.random.uniform(self.boundaries[:,0], self.boundaries[:,1], size=(num_samples, self.dimensions))
+			sample_vectors = np.unique(sample_vectors, axis=0)
+			while len(sample_vectors) < num_samples:
+				count = num_samples - len(sample_vectors)
+				sample_vectors = np.concatenate((sample_vectors, np.random.uniform(self.boundaries[:,0], self.boundaries[:,1], size=(count, self.dimensions))))
+				sample_vectors = np.unique(sample_vectors, axis=0)
 		else:
 			sample_vectors = np.zeros((0, self.dimensions))
 
@@ -90,31 +95,40 @@ class AdaNS_sampler(object):
 		self.good_samples = self.all_scores>=score_thr
 	
 
-	def configure_alpha(self, alpha_max=1.0):
+	def configure_alpha(self, alpha_max=1.0, verbose=True):
 		'''
 		function to determine \alpha based on current good samples
 			- alpha_max: \alpha_max
 		'''
 		if np.sum(self.good_samples)<self.minimum_num_good_samples:
 			self.max_score = np.max(self.all_scores)
-			
 			alpha_t = alpha_max
-			itr = 0
-			while np.sum(self.good_samples)<self.minimum_num_good_samples and itr<1000:
-				if self.max_score < 0:
-					alpha_t = alpha_t + 0.05
-				else:
-					alpha_t = alpha_t - 0.05
-
-				self.update_good_samples(alpha_t)
-				itr += 1
-
-			if np.sum(self.good_samples)<self.minimum_num_good_samples:
-				sorted_args = np.argsort(self.all_scores)[::-1]
-				alpha_t = self.all_scores[sorted_args[self.minimum_num_good_samples-1]] / self.all_scores[sorted_args[0]]
-				self.update_good_samples(alpha_t)
 			
-			print('changing alpha_t to %0.2f' % (alpha_t))
+
+			if self.max_score==0:
+				sorted_args = np.argsort(self.all_scores)[::-1]
+				indices = sorted_args[:self.minimum_num_good_samples]
+				self.good_samples[indices] = True
+				assert np.sum(self.good_samples)==self.minimum_num_good_samples, (np.sum(self.good_samples), self.minimum_num_good_samples)
+
+			else:
+				itr = 0
+				while np.sum(self.good_samples)<self.minimum_num_good_samples and itr<1000:
+					if self.max_score < 0:
+						alpha_t = alpha_t + 0.05
+					else:
+						alpha_t = alpha_t - 0.05
+
+					self.update_good_samples(alpha_t)
+					itr += 1
+
+				if np.sum(self.good_samples)<self.minimum_num_good_samples:
+					sorted_args = np.argsort(self.all_scores)[::-1]
+					alpha_t = self.all_scores[sorted_args[self.minimum_num_good_samples-1]] / self.all_scores[sorted_args[0]]
+					self.update_good_samples(alpha_t)
+				
+			if verbose:
+				print('changing alpha_t to %0.2f' % (alpha_t))
 			self.alpha_t = alpha_t
 
 		return self.alpha_t
@@ -128,13 +142,21 @@ class AdaNS_sampler(object):
 			- alpha_max: current \alpha_max
 		'''   
 		self.all_samples = np.concatenate((self.all_samples, samples), axis=0)
-		self.all_scores = np.concatenate((self.all_scores, scores), axis=0)
+		orig_count = self.all_samples.shape[0]
+		self.all_samples, indices = np.unique(self.all_samples, axis=0, return_index=True)
+		if self.all_samples.shape[0] < orig_count:
+			print(f'==== Removing {orig_count-self.all_samples.shape[0]} duplicate samples')
+
+		self.all_scores = np.concatenate((self.all_scores, scores), axis=0)[indices]
+		assert len(self.all_samples)==len(self.all_scores)
 
 		self.update_good_samples(alpha_max)
 
+		return indices
+
 
 	def run_sampling(self, evaluator, num_samples, n_iter, minimize=False, alpha_max=1.0, early_stopping=np.Infinity, 
-		save_path='./sampling', n_parallel=1, plot_contour=False, executor=mp.Pool):
+		save_path='./sampling', n_parallel=1, plot_contour=False, executor=mp.Pool, verbose=True):
 		'''
 		Function to maximize given black-box function and save results to ./sampling/
 			- evaluator : the objective function to be minimized
@@ -152,25 +174,34 @@ class AdaNS_sampler(object):
 		coeff = -1 if minimize else 1
 
 		# set up logging directory
-		if not os.path.exists(save_path):
-			os.mkdir(save_path)
+		os.makedirs(save_path, exist_ok=True)
 
 		# set up contour plotting
 		contour = None
 		if plot_contour:
 			if self.dimensions==2:
-				x = np.linspace(self.boundaries[0,0], self.boundaries[0,1], num=50)
-				y = np.linspace(self.boundaries[1,0], self.boundaries[1,1], num=50)
-				
-				data = np.zeros((50, 50))
-				for i in range(len(x)):
-					for j in range(len(y)):
-						data[i, j] = evaluator([x[i], y[j]])
-				contour = (x, y, data)
-
 				path_to_contour = os.path.join(save_path, 'contour')
-				if not os.path.exists(path_to_contour):
-					os.makedirs(path_to_contour)
+				os.makedirs(path_to_contour, exist_ok=True)
+				contour_file = os.path.join(path_to_contour, 'contour_data.pkl')
+				if not os.path.exists(contour_file):
+					x = np.linspace(self.boundaries[0,0], self.boundaries[0,1], num=1000)
+					y = np.linspace(self.boundaries[1,0], self.boundaries[1,1], num=1000)
+
+					data = np.zeros((len(x), len(y)))
+					for i in range(len(x)):
+						for j in range(len(y)):
+							data[i, j] = evaluator([x[i], y[j]])
+					contour = (x, y, data)
+					with open(contour_file, 'wb') as f:
+						pickle.dump(contour, f)
+				else:
+					with open(contour_file, 'rb') as f:
+						contour = pickle.load(f)
+						x, y, data = contour
+
+				max_val = np.max(data)
+				max_ind = np.unravel_index(np.argmax(data, axis=None), data.shape)
+				print('maximum is %.2f located at (%.2f, %.2f)'%(max_val, x[int(max_ind[0])], y[int(max_ind[1])]))
 			else:
 				print('=> Contour plotting not possible for %d dimensions.'%self.dimensions)
 
@@ -194,7 +225,7 @@ class AdaNS_sampler(object):
 			else:
 				max_score_improv = self.max_score - prev_max_score
 				prev_max_score = self.max_score
-				samples, origins = self.sample(num_samples)
+				samples, origins = self.sample(num_samples, verbose=verbose)
 
 				# if the percentage improvement in the maximum score is smaller than 0.1%, activate early stopping
 				if (max_score_improv/prev_max_score) < 0.001:
@@ -211,11 +242,13 @@ class AdaNS_sampler(object):
 			n_batches = len(samples)//n_parallel if len(samples)%n_parallel==0 else (len(samples)//n_parallel)+1
 			with tqdm(total=n_batches) as pbar:
 				for i in range(n_batches):
-					batch_samples = samples[i*n_parallel:(i+1)*n_parallel]
-
-					with executor() as e:
-						scores[i*n_parallel:(i+1)*n_parallel] = list(e.map(evaluator, batch_samples))
-						scores[i*n_parallel:(i+1)*n_parallel] *= coeff
+					if n_parallel > 1:
+						batch_samples = samples[i*n_parallel:(i+1)*n_parallel]
+						with executor() as e:
+							scores[i*n_parallel:(i+1)*n_parallel] = list(e.map(evaluator, batch_samples))
+					else:
+						scores[i] = evaluator(samples[i])
+					scores[i*n_parallel:(i+1)*n_parallel] *= coeff
 					
 					pbar.update(1)
 					pbar.set_description('batch %s/%s (samples %s..%s/%s)'%(i+1, num_samples//n_parallel, i*n_parallel, \
@@ -223,7 +256,7 @@ class AdaNS_sampler(object):
 			self.update(samples=samples, scores=scores, origins=origins, alpha_max=alpha_max)
 
 			# modify \alpha if necessary, to make sure there are enough "good" samples
-			alpha = self.configure_alpha(alpha_max)
+			alpha = self.configure_alpha(alpha_max, verbose=verbose)
 			alpha_vals.append(alpha)
 
 			# optionally visualize the current samples on the search-space
@@ -242,13 +275,15 @@ class AdaNS_sampler(object):
 			id_best = np.argmax(self.all_scores)
 			best_samples.append(self.all_samples[id_best])
 			
-			print('=> iter: %d, average score: %.3f, best score: %0.3f' %(iteration, np.mean(scores), best_scores[-1]))
+			if verbose:
+				print('=> iter: %d, average score: %.3f, best score: %0.3f' %(iteration, np.mean(scores)*coeff, best_scores[-1]*coeff))
 
 		info = {'best_samples': np.asarray(best_samples),
 				'best_scores': np.asarray(best_scores),
 				'alpha_vals': alpha_vals,
 				'all_samples': self.all_samples,
-				'all_scores': self.all_scores,}
+				'all_scores': self.all_scores,
+				'good_samples':self.good_samples}
 
 		path_to_info = os.path.join(save_path, 'history_info.pkl')
 		with open(path_to_info, 'wb') as f:
@@ -267,7 +302,7 @@ class AdaNS_sampler(object):
 				plt.savefig(os.path.join(path_to_contour, 'score_contour_final.png'))
 				plt.close()
 
-		return best_sample_overall
+		return best_sample_overall, best_scores[id_best_overall]*coeff
 
 
 class Genetic_sampler(AdaNS_sampler):
@@ -343,13 +378,13 @@ class Genetic_sampler(AdaNS_sampler):
 		return father, mother
 
 
-	def sample(self, num_samples):
+	def sample(self, num_samples, **kwargs):
 		'''
 		function to sample from the search-space
 			- num_samples: number of samples to take
 		'''
 		if num_samples==0:
-			return np.zeros(0, self.dimensions).astype(np.int32)
+			return np.zeros((0, self.dimensions)).astype(np.int32)
 
 		num_samples = num_samples + np.mod(num_samples, 2)
 
@@ -427,15 +462,16 @@ class Gaussian_sampler(AdaNS_sampler):
 								"pair selection should be one of ['random','top_scores','top_and_nearest','top_and_furthest','top_and_random']"
 
 
-	def sample(self, num_samples):
+	def sample(self, num_samples, verbose=True, **kwargs):
 		'''
 		function to sample from the search-space
 			- num_samples: number of samples to take
 		'''
 		if num_samples==0:
-			return np.zeros(0, self.dimensions).astype(np.int32), []
+			return np.zeros((0, self.dimensions)).astype(np.int32), []
 
 		data = self.all_samples[self.good_samples]
+		assert len(np.unique(data, axis=0))==data.shape[0], 'duplicate samples found'
 		scores = self.all_scores[self.good_samples] - np.min(self.all_scores[self.good_samples])
 		avg_good_scores = np.mean(scores)
 		scores = scores + avg_good_scores
@@ -451,17 +487,25 @@ class Gaussian_sampler(AdaNS_sampler):
 		gaussian_covs = np.asarray([((max_all_dims-min_all_dims)/4.0)**2 for _ in range(len(data))])
 		gaussian_mix = GaussianMixture(n_components=data.shape[0], covariance_type='diag',
 									  weights_init=np.ones(data.shape[0])/data.shape[0], means_init=data)
-		gaussian_mix.fit(X=data)
-		gaussian_mix.means_ = gaussian_means
-		gaussian_mix.covariances_ = gaussian_covs
-		gaussian_mix.weights_ = scores/np.sum(scores)
 		
-		if local_sampling>0:
-			local_samples  = gaussian_mix.sample(n_samples=local_sampling)[0]
-			local_samples  = np.clip(local_samples, self.boundaries[:,0], self.boundaries[:,1])
-		else:
-			local_samples = np.zeros((0, self.dimensions))
-		
+		try:
+			gaussian_mix.fit(X=data)
+			gaussian_mix.means_ = gaussian_means
+			gaussian_mix.covariances_ = gaussian_covs
+			if np.sum(scores)==0:
+				print('====== sum of scores was zero')
+				gaussian_mix.weights_ = [1./len(scores)] * len(scores)
+			else:
+				gaussian_mix.weights_ = scores/np.sum(scores)
+
+			if local_sampling>0:
+				local_samples  = gaussian_mix.sample(n_samples=local_sampling)[0]
+				local_samples  = np.clip(local_samples, self.boundaries[:,0], self.boundaries[:,1])
+			else:
+				local_samples = np.zeros((0, self.dimensions))
+		except:
+			local_samples  = self.sample_uniform(num_samples=local_sampling)
+
 		# "Cross" samples created with gaussians	
 		cross_sampling = int(num_samples*self.cross_portion+0.001)
 		cross_sampling = cross_sampling + np.mod(cross_sampling, 2)
@@ -484,7 +528,8 @@ class Gaussian_sampler(AdaNS_sampler):
 		random_sampling = int(num_samples*self.u_random_portion+0.001)  
 		random_samples = self.sample_uniform(num_samples=random_sampling)
 			   
-		print('sampled %d uniformly, %d with local gaussians, %d with cross gaussians'%(len(random_samples), len(local_samples), len(cross_samples)))
+		if verbose:
+			print('sampled %d uniformly, %d with local gaussians, %d with cross gaussians'%(len(random_samples), len(local_samples), len(cross_samples)))
 		
 		origins_random = ['U'] * len(random_samples)
 		origins_local = ['L'] * len(local_samples)
@@ -497,6 +542,16 @@ class Gaussian_sampler(AdaNS_sampler):
 			
 		if cross_sampling>0:
 			sample_vectors = np.concatenate((sample_vectors, cross_samples))
+
+		sample_vectors, indices = np.unique(sample_vectors, axis=0, return_index=True)
+		origins = [origins[i] for i in indices]
+		while len(sample_vectors) < num_samples:
+			count = num_samples - len(sample_vectors)
+			print(f'adding {count} more random samples')
+			sample_vectors = np.concatenate((sample_vectors, self.sample_uniform(num_samples=count)))
+			origins += ['U'] * count
+			sample_vectors, indices = np.unique(sample_vectors, axis=0, return_index=True)
+			origins = [origins[i] for i in indices]
 		
 		return sample_vectors, origins
 
@@ -509,8 +564,8 @@ class Gaussian_sampler(AdaNS_sampler):
 			- origins: origin of new samples (zoom, genetic, gaussian-local, gaussian-cross, uniform-random)
 			- alpha_max: current \alpha_max
 		''' 
-		super(Gaussian_sampler, self).update(samples, scores, alpha_max)
-		self.origins += origins  
+		indices = super(Gaussian_sampler, self).update(samples, scores, alpha_max)
+		self.origins = np.concatenate((self.origins, origins), axis=0)[indices]
 	
 
 	def get_pairs(self, num_pairs):
@@ -676,7 +731,7 @@ class Zoom_sampler(AdaNS_sampler):
 		
 		indices = np.arange(0, self.num_regions)
 		if num_samples==0:
-			return np.zeros(0, self.dimensions).astype(np.int32)
+			return np.zeros((0, self.dimensions)).astype(np.int32)
 
 		# Choose samples from good regions with non-uniform density
 		probs = self.per_region_sampling_probs/np.sum(self.per_region_sampling_probs)
@@ -701,6 +756,7 @@ class Zoom_sampler(AdaNS_sampler):
 			if num_samples>0:
 				self.per_region_sampling_probs[i] = self.per_region_num_goods[i]/num_samples
 
+	
 	def configure_alpha(self, alpha_max=1.0):
 		'''
 		function to determine \alpha based on current good samples
@@ -711,6 +767,7 @@ class Zoom_sampler(AdaNS_sampler):
 
 		return self.alpha_t
 
+	
 	def update(self, samples, ids, scores, alpha_max):	
 		'''
 		function to add newly evaluated samples to the history
@@ -719,8 +776,8 @@ class Zoom_sampler(AdaNS_sampler):
 			- scores: evaluation score of new samples
 			- alpha_max: current \alpha_max
 		'''   
-		super(Zoom_sampler, self).update(samples, scores, alpha_max)
-		self.region_ids = np.concatenate((self.region_ids, ids), axis=0)
+		indices = super(Zoom_sampler, self).update(samples, scores, alpha_max)
+		self.region_ids = np.concatenate((self.region_ids, ids), axis=0)[indices]
 
 		self.update_region_w(alpha_max)
 
@@ -791,7 +848,7 @@ class Zoom_sampler(AdaNS_sampler):
 
 
 	def run_sampling(self, evaluator, num_samples, n_iter, minimize=False, alpha_max=1.0, early_stopping=np.Infinity, 
-		save_path='./sampling', n_parallel=1, plot_contour=False, executor=mp.Pool):
+		save_path='./sampling', n_parallel=1, plot_contour=False, executor=mp.Pool, verbose=True):
 		'''
 		Function to maximize given black-box function and save results to ./sampling/
 			- evaluator : the objective function to be minimized
@@ -816,18 +873,28 @@ class Zoom_sampler(AdaNS_sampler):
 		contour = None
 		if plot_contour:
 			if self.dimensions==2:
-				x = np.linspace(self.boundaries[0,0], self.boundaries[0,1], num=50)
-				y = np.linspace(self.boundaries[1,0], self.boundaries[1,1], num=50)
-				
-				data = np.zeros((50, 50))
-				for i in range(len(x)):
-					for j in range(len(y)):
-						data[i, j] = evaluator([x[i], y[j]])
-				contour = (x, y, data)
-
 				path_to_contour = os.path.join(save_path, 'contour')
-				if not os.path.exists(path_to_contour):
-					os.makedirs(path_to_contour)
+				os.makedirs(path_to_contour, exist_ok=True)
+				contour_file = os.path.join(path_to_contour, 'contour_data.pkl')
+				if not os.path.exists(contour_file):
+					x = np.linspace(self.boundaries[0,0], self.boundaries[0,1], num=1000)
+					y = np.linspace(self.boundaries[1,0], self.boundaries[1,1], num=1000)
+
+					data = np.zeros((len(x), len(y)))
+					for i in range(len(x)):
+						for j in range(len(y)):
+							data[i, j] = evaluator([x[i], y[j]])
+					contour = (x, y, data)
+					with open(contour_file, 'wb') as f:
+						pickle.dump(contour, f)
+				else:
+					with open(contour_file, 'rb') as f:
+						contour = pickle.load(f)
+						x, y, data = contour
+
+				max_val = np.max(data)
+				max_ind = np.unravel_index(np.argmax(data, axis=None), data.shape)
+				print('maximum is %.2f located at (%.2f, %.2f)'%(max_val, x[int(max_ind[0])], y[int(max_ind[1])]))
 			else:
 				print('=> Contour plotting not possible for %d dimensions.'%self.dimensions)
 
@@ -874,15 +941,17 @@ class Zoom_sampler(AdaNS_sampler):
 				n_batches = len(samples)//n_parallel if len(samples)%n_parallel==0 else (len(samples)//n_parallel)+1
 				with tqdm(total=n_batches) as pbar:
 					for i in range(n_batches):
-						batch_samples = samples[i*n_parallel:(i+1)*n_parallel]
-
-						with executor() as e:
-							scores[i*n_parallel:(i+1)*n_parallel] = list(e.map(evaluator, batch_samples))
-							scores[i*n_parallel:(i+1)*n_parallel] *= coeff
-						
+						if n_parallel > 1:
+							batch_samples = samples[i*n_parallel:(i+1)*n_parallel]
+							with executor() as e:
+								scores[i*n_parallel:(i+1)*n_parallel] = list(e.map(evaluator, batch_samples))
+						else:
+							scores[i] = evaluator(samples[i])
+						scores[i*n_parallel:(i+1)*n_parallel] *= coeff
+					
 						pbar.update(1)
 						pbar.set_description('batch %s/%s (samples %s..%s/%s)'%(i+1, num_samples//n_parallel, i*n_parallel, \
-														(i+1)*n_parallel, num_samples))			  
+														(i+1)*n_parallel, num_samples))					  
 				self.update(samples=samples, ids=ids, scores=scores, alpha_max=alpha_max)
 
 				# modify \alpha if necessary, to make sure there are enough "good" samples
@@ -912,7 +981,8 @@ class Zoom_sampler(AdaNS_sampler):
 				id_best = np.argmax(self.all_scores)
 				best_samples.append(self.all_samples[id_best])
 			
-				print('=> iter: %d, average score: %.3f, best score: %0.3f' %(iteration, np.mean(scores), best_scores[-1]))
+				if verbose:
+					print('=> iter: %d, average score: %.3f, best score: %0.3f' %(iteration, np.mean(scores)*coeff, best_scores[-1]*coeff))
 
 				if max_id==prev_max_id:
 					id_was_the_same += 1
@@ -941,7 +1011,8 @@ class Zoom_sampler(AdaNS_sampler):
 				'best_scores': np.asarray(best_scores),
 				'alpha_vals': alpha_vals,
 				'all_samples': self.all_samples,
-				'all_scores': self.all_scores,}
+				'all_scores': self.all_scores,
+				'good_samples':self.good_samples}
 
 		path_to_info = os.path.join(save_path, 'history_info.pkl')
 		with open(path_to_info, 'wb') as f:
@@ -960,4 +1031,4 @@ class Zoom_sampler(AdaNS_sampler):
 				plt.savefig(os.path.join(path_to_contour, 'score_contour_final.png'))
 				plt.close()
 
-		return best_sample_overall
+		return best_sample_overall, best_scores[id_best_overall]*coeff
