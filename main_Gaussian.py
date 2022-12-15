@@ -58,6 +58,14 @@ def evaluator_fn(x):
 
 	return f
 
+# optionally define a constraint check for samples
+def constraint_fn(x):
+	'''
+		x: <d> the hyperparameter vector
+		returns: True/False based on whether \vec x satisfies the constraints 
+	'''
+	return True
+
 
 def get_run_config():
 	parser = argparse.ArgumentParser(description='PyTorch CIFAR-10 Training')
@@ -82,6 +90,9 @@ def get_run_config():
 								help='dimensionality of the search-space (default: None)')
 	parser.add_argument('--path_to_boundaries', default='', type=str,
 								help='path to csv file containing search-space boundaries (default: '')')
+	parser.add_argument('--path_to_init_samples', default='', type=str,
+								help='path to pickle file containing initial samples (default: '')')
+
 	parser.add_argument('--n_iter', default=50, type=int,
 								help='number of optimization iterations (default: 50)')
 	parser.add_argument('--n_parallel', default=1, type=int,
@@ -127,18 +138,25 @@ def main():
 		else:
 			boundaries = boundaries[:args.dim, :]
 		print('=> loaded boundaries are: \n', boundaries)
+
+	# optionally loading initial set of samples for a warm start
+	init_samples = None
+	if len(args.path_to_init_samples) > 0:
+		with open(args.path_to_init_samples, 'rb') as f:
+			init_samples = pickle.load(f)
 		
 	args.save_path = os.path.join('artifacts', args.name)
 	if not os.path.exists(args.save_path):
 		os.makedirs(args.save_path)
 	
 	# Instantiating the sampler
-	sampler = Gaussian_sampler(boundaries, args.num_samples, args.u_random_portion, args.local_portion, args.cross_portion, args.pair_selection)
+	sampler = Gaussian_sampler(boundaries, constraint_fn=constraint_fn, minimum_num_good_samples=args.num_samples, 
+								u_random_portion=args.u_random_portion, local_portion=args.local_portion, cross_portion=args.cross_portion, pair_selection_method=args.pair_selection)
 	
 	print('=> Starting optimization')
-	best_sample = sampler.run_sampling(evaluator, args.num_samples, args.n_iter, args.minimize, args.alpha_max, early_stopping=args.early_stopping, 
+	best_sample = sampler.run_sampling(evaluator, num_samples=args.num_samples, n_iter=args.n_iter, minimize=args.minimize, alpha_max=args.alpha_max, early_stopping=args.early_stopping, 
 										save_path=args.save_path, n_parallel=args.n_parallel, plot_contour=args.plot_contour, 
-										executor=mp.Pool, verbose=not(args.no_verbose))
+										executor=mp.Pool, verbose=not(args.no_verbose), init_samples=init_samples)
 	print('=> optimal hyperparameters:', best_sample)
 
 

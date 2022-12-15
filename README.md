@@ -13,7 +13,7 @@ We present three sampling strategies to perform the optimization. To use the lib
 
 We provide three examples for performing optimization with AdaNS in `main_Gaussian.py`, `main_Genetic.py`, and `main_Zoom.py`. Each of the files incorporates a different sampling strategy for optimization described in the paper. Below we summarize the common arguments needed for all files:
 
- -  The objective function needs to be wrapped into a Python function.
+ -  The objective function needs to be wrapped into this Python function.
     
     ```python
     def evaluator_fn(x):
@@ -23,6 +23,19 @@ We provide three examples for performing optimization with AdaNS in `main_Gaussi
     ```
     
     where `x` is a vector of design hyperparameters to be optimized, and `f` is the value of the objective function evaluated at x. You can also choose from a set of example objective functions provided in `utils/example_functions.py`.
+
+
+ -  (Optional) desired constraints for sample needs to be wrapped into this Python function which will be checked during optimization.
+    
+    ```python
+    def constraint_fn(x):
+        ...
+        return True
+    
+    ```
+    
+    where `x` is a vector of design hyperparameters to be optimized.
+   
 
    - The rest of the arguments used by the three optimization tools are as follows: 
 
@@ -37,6 +50,7 @@ We provide three examples for performing optimization with AdaNS in `main_Gaussi
 		parser.add_argument('--num_samples', default=50, type=int, help='per-iteration sample size (default: 50)')
 		parser.add_argument('--dim', type=int,help='dimensionality of the search-space (default: None)')
 		parser.add_argument('--path_to_boundaries', default='', type=str,help='path to csv file containing search-space boundaries (default: '')')
+		parser.add_argument('--path_to_init_samples', default='', type=str, help='path to pickle file containing initial samples (default: '')')
 		parser.add_argument('--n_iter', default=50, type=int, help='number of optimization iterations (default: 50)')
 		parser.add_argument('--n_parallel', default=1, type=int, help='number of cores for parallel evaluations (default:1)')
 		parser.add_argument('--alpha_max', default=1.0, type=float, help='alpha_max parameter (default:1.0)')
@@ -62,6 +76,7 @@ We provide three examples for performing optimization with AdaNS in `main_Gaussi
 		parser.add_argument('--p_mutate', default=0.8, type=float, help='probability of mutate (default: 0.8)')
 		parser.add_argument('--p_tweak', default=0.05, type=float, help='per-bit tweaking probability (default: 0.05)')
 		parser.add_argument('--mutate_scale', default=0.2, type=float, help='std of the noise added during mutation (default: 0.2)')
+		parser.add_argument('--is_discrete', action='store_true', help='select this option if the search-space is discrete (default: False)')
 		```
 	
 ## Reference:

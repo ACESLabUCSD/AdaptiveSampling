@@ -40,6 +40,7 @@ import time
 import collections
 import pickle
 import copy
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import multiprocessing as mp
@@ -58,6 +59,14 @@ def evaluator_fn(x):
 	f = np.absolute(x[0]-x[1]) + ((x[0]+x[1]-1)/3)**2
 
 	return f
+
+# optionally define a constraint check for samples
+def constraint_fn(x):
+	'''
+		x: <d> the hyperparameter vector
+		returns: True/False based on whether \vec x satisfies the constraints 
+	'''
+	return True
 
 
 def get_run_config():
@@ -83,6 +92,9 @@ def get_run_config():
 								help='dimensionality of the search-space (default: None)')
 	parser.add_argument('--path_to_boundaries', default='', type=str,
 								help='path to csv file containing search-space boundaries (default: '')')
+	parser.add_argument('--path_to_init_samples', default='', type=str,
+								help='path to pickle file containing initial samples (default: '')')
+
 	parser.add_argument('--n_iter', default=50, type=int,
 								help='number of optimization iterations (default: 50)')
 	parser.add_argument('--n_parallel', default=1, type=int,
@@ -93,6 +105,8 @@ def get_run_config():
 								help='number of iterations without improvement to activate early stopping (default: 1000)')
 	
 	#-------------- Genetic Sampler parameters
+	parser.add_argument('--u_random_portion', default=0.2, type=float,
+								help='portion of samples to take unifromly random from the entire space (default:0.2)')
 	parser.add_argument('--p_cross', default=0.8, type=float,
 								help='probability of crossover (default: 0.8)')
 	parser.add_argument('--p_swap', default=0.2, type=float,
@@ -103,6 +117,8 @@ def get_run_config():
 								help='per-bit tweaking probability (default: 0.05)')
 	parser.add_argument('--mutate_scale', default=0.2, type=float,
 								help='std of the noise added during mutation (default: 0.2)')
+	parser.add_argument('--is_discrete', action='store_true',
+								help='select this option if the search-space is discrete (default: False)')
 	
 	args = parser.parse_args()
 	return args
@@ -119,29 +135,42 @@ def main():
 		evaluator = evaluator_fn
 
 	# determining the search-space boundaries
-	if len(args.path_to_boundaries)==0:
+	if len(args.path_to_boundaries) == 0:
 		assert args.dim is not None, 'Please either provide the search-space boundaries or the dimensionality of the search-space'
 		boundaries = np.asarray([[0, 1] for _ in range(args.dim)])
 		print('=> no boundaries provided, setting default to [0, 1] for all dimensions')
 	else:
-		boundaries = np.genfromtxt(args.path_to_boundaries, delimiter=',')
+		with open(args.path_to_boundaries, 'r') as f:
+			lines = f.readlines()
+		boundaries = []
+		for l in lines:
+			boundaries.append([float(s) for s in l.strip().split(',')])
 		if args.dim is None:
 			args.dim = len(boundaries)
 		else:
-			boundaries = boundaries[:args.dim, :]
+			boundaries = boundaries[:args.dim]
 		print('=> loaded boundaries are: \n', boundaries)
+		if not args.is_discrete:
+			boundaries = np.asarray(boundaries)
+
+	# optionally loading initial set of samples for a warm start
+	init_samples = None
+	if len(args.path_to_init_samples) > 0:
+		with open(args.path_to_init_samples, 'rb') as f:
+			init_samples = pickle.load(f)
 		
 	args.save_path = os.path.join('artifacts', args.name)
 	if not os.path.exists(args.save_path):
 		os.makedirs(args.save_path)
 	
 	# Instantiating the sampler
-	sampler = Genetic_sampler(boundaries, args.num_samples, args.p_cross, args.p_swap, args.p_mutate, args.p_tweak, args.mutate_scale)
+	sampler = Genetic_sampler(boundaries, constraint_fn=constraint_fn, minimum_num_good_samples=args.num_samples, u_random_portion=args.u_random_portion, 
+					p_cross=args.p_cross, p_swap=args.p_swap, p_mutate=args.p_mutate, p_tweak=args.p_tweak, mutate_scale=args.mutate_scale, is_discrete=args.is_discrete)
 	
 	print('=> Starting optimization')
-	best_sample = sampler.run_sampling(evaluator, args.num_samples, args.n_iter, args.minimize, args.alpha_max, early_stopping=args.early_stopping, 
+	best_sample = sampler.run_sampling(evaluator, num_samples=args.num_samples, n_iter=args.n_iter, minimize=args.minimize, alpha_max=args.alpha_max, early_stopping=args.early_stopping, 
 										save_path=args.save_path, n_parallel=args.n_parallel, plot_contour=args.plot_contour, 
-										executor=mp.Pool, verbose=not(args.no_verbose))
+										executor=mp.Pool, verbose=not(args.no_verbose), init_samples=init_samples)
 	print('=> optimal hyperparameters:', best_sample)
 
 

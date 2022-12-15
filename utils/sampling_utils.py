@@ -44,7 +44,9 @@ from tqdm import tqdm
 from sklearn.mixture import GaussianMixture
 
 class AdaNS_sampler(object):
-	def __init__(self, boundaries, minimum_num_good_samples):
+	def __init__(self, boundaries, constraint_fn, minimum_num_good_samples):
+		self.constraint_fn = constraint_fn
+
 		# minimum number of good samples (b) used to find the value of \alpha for each iteration
 		self.minimum_num_good_samples = minimum_num_good_samples
 		
@@ -67,12 +69,15 @@ class AdaNS_sampler(object):
 		function to sample unifromly from all the search-space
 			- num_samples: number of samples to take
 		'''
-		if num_samples>0:
-			sample_vectors = np.random.uniform(self.boundaries[:,0], self.boundaries[:,1], size=(num_samples, self.dimensions))
-			sample_vectors = np.unique(sample_vectors, axis=0)
+		if num_samples > 0:
+			sample_vectors = np.asarray([]).reshape(0, self.dimensions)
 			while len(sample_vectors) < num_samples:
 				count = num_samples - len(sample_vectors)
-				sample_vectors = np.concatenate((sample_vectors, np.random.uniform(self.boundaries[:,0], self.boundaries[:,1], size=(count, self.dimensions))))
+				new_samples = np.random.uniform(self.boundaries[:,0], self.boundaries[:,1], size=(count, self.dimensions))
+				constraint_check = np.asarray(list(map(self.constraint_fn, new_samples)))
+				new_samples = new_samples[np.where(constraint_check)[0]]
+
+				sample_vectors = np.concatenate((sample_vectors, new_samples))
 				sample_vectors = np.unique(sample_vectors, axis=0)
 		else:
 			sample_vectors = np.zeros((0, self.dimensions))
@@ -156,7 +161,7 @@ class AdaNS_sampler(object):
 
 
 	def run_sampling(self, evaluator, num_samples, n_iter, minimize=False, alpha_max=1.0, early_stopping=np.Infinity, 
-		save_path='./sampling', n_parallel=1, plot_contour=False, executor=mp.Pool, verbose=True):
+		save_path='./sampling', n_parallel=1, plot_contour=False, executor=mp.Pool, verbose=True, init_samples=None):
 		'''
 		Function to maximize given black-box function and save results to ./sampling/
 			- evaluator : the objective function to be minimized
@@ -169,6 +174,7 @@ class AdaNS_sampler(object):
 			- n_parallel: number of parallel evaluations
 			- plot_contour: whether to plot contours of objective functions and the samples
 			- executor: function to handle parallel evaluations
+			- init
 		returns: optimal hyperparameters
 		'''
 		coeff = -1 if minimize else 1
@@ -211,17 +217,17 @@ class AdaNS_sampler(object):
 			print('=> Sampling budget was adjusted to be ' + str(num_samples))
 			self.minimum_num_good_samples = num_samples
 
-		
 		# apply the sampling algorithm
 		best_samples = []
 		best_scores = []
 		alpha_vals = []
 		num_not_improve = 0
 		for iteration in range(n_iter):
-			if iteration==0:
-				samples = self.sample_uniform(num_samples)
+			if iteration == 0:
+				samples = self.sample_uniform(num_samples) if init_samples is None else init_samples
 				origins = ['U']*len(samples)
 				prev_max_score = self.max_score
+
 			else:
 				max_score_improv = self.max_score - prev_max_score
 				prev_max_score = self.max_score
@@ -306,7 +312,7 @@ class AdaNS_sampler(object):
 
 
 class Genetic_sampler(AdaNS_sampler):
-	def __init__(self, boundaries, minimum_num_good_samples, p_cross=0.8, p_swap=0.2, p_mutate=0.8, p_tweak=0.05, mutate_scale=0.2):
+	def __init__(self, boundaries, constraint_fn, minimum_num_good_samples, u_random_portion=0.2, p_cross=0.8, p_swap=0.2, p_mutate=0.8, p_tweak=0.05, mutate_scale=0.2, is_discrete=False):
 		'''
 			- p_cross: probability of crossing the parent vectors
 			- p_swap: probability of swapping each hyperparameter in the parent vectors 
@@ -315,13 +321,36 @@ class Genetic_sampler(AdaNS_sampler):
 			- mutate_scale: mutation noise is sampled from N~(0, mutate_scale) 
 		'''
 
-		super(Genetic_sampler, self).__init__(boundaries, minimum_num_good_samples)
+		super(Genetic_sampler, self).__init__(boundaries=boundaries, constraint_fn=constraint_fn, minimum_num_good_samples=minimum_num_good_samples)
 
+		self.u_random_portion = u_random_portion
 		self.p_cross = p_cross
 		self.p_swap = p_swap
 		self.p_mutate = p_mutate
 		self.p_tweak = p_tweak
 		self.mutate_scale = mutate_scale
+		self.is_discrete = is_discrete
+		if is_discrete:
+			self.sample_uniform = self.sample_uniform_discrete
+	
+	
+	def sample_uniform_discrete(self, num_samples=1):
+		'''
+		function to sample unifromly from all the search-space
+			- num_samples: number of samples to take
+		'''
+		if num_samples > 0:
+			sample_vectors = np.asarray([]).reshape(0, self.dimensions)
+			while len(sample_vectors) < num_samples:
+				new_sample = np.expand_dims([np.random.choice(self.boundaries[i]) for i in range(self.dimensions)], axis=0)
+				if self.constraint_fn(new_sample):
+					sample_vectors = np.concatenate((sample_vectors, new_sample))
+					sample_vectors = np.unique(sample_vectors, axis=0)
+
+		else:
+			sample_vectors = np.zeros((0, self.dimensions))
+
+		return sample_vectors
 	
 
 	def set_params(self, p_cross=None, p_swap=None, p_mutate=None, p_tweak=None, mutate_scale=None):
@@ -353,10 +382,14 @@ class Genetic_sampler(AdaNS_sampler):
 				p = np.random.rand()
 				if p <= self.p_tweak:
 					#----------- mutate this gene
-					noise = np.random.normal(loc=0.0, scale=self.mutate_scale)
-					individual[i] = individual[i] + noise
+					if self.is_discrete:
+						individual[i] = np.random.choice(self.boundaries[i])
+					else:
+						noise = np.random.normal(loc=0.0, scale=self.mutate_scale)
+						individual[i] = individual[i] + noise
 
-		individual = np.clip(individual, self.boundaries[:,0], self.boundaries[:,1])
+		if not self.is_discrete:
+			individual = np.clip(individual, self.boundaries[:,0], self.boundaries[:,1])
 		return individual
 	
 
@@ -378,47 +411,74 @@ class Genetic_sampler(AdaNS_sampler):
 		return father, mother
 
 
-	def sample(self, num_samples, **kwargs):
+	def sample(self, num_samples, verbose=True, **kwargs):
 		'''
 		function to sample from the search-space
 			- num_samples: number of samples to take
 		'''
-		if num_samples==0:
+		if num_samples == 0:
 			return np.zeros((0, self.dimensions)).astype(np.int32)
 
-		num_samples = num_samples + np.mod(num_samples, 2)
-
-		if num_samples >= int(np.sum(self.good_samples)+0.001):
-			num_samples = int(np.sum(self.good_samples)+0.001)
-			num_samples = num_samples - np.mod(num_samples, 2)
-			genetic_samples = self.all_samples[self.good_samples][:num_samples]
+		random_sampling = int(num_samples*self.u_random_portion+0.001)  
+		random_samples = self.sample_uniform(num_samples=random_sampling)
+			   
+		num_samples = num_samples - random_sampling + np.mod(num_samples, 2)
+		if num_samples == 0:
+			genetic_samples = np.zeros((0, self.dimensions)).astype(np.int32)
 		else:
-			inds = np.where(self.good_samples)[0]
-			probs = (self.all_scores[self.good_samples] - np.min(self.all_scores[self.good_samples]))
-			avg_good_scores = np.mean(probs)
-			probs = probs + avg_good_scores
-			if np.sum(probs)==0:
-				probs = np.ones_like(probs)
-			choices = np.random.choice(inds, size=num_samples, replace=False, p=probs/np.sum(probs))
-			genetic_samples = np.asarray([self.all_samples[c] for c in choices])
-			
-		for index in range(num_samples//2):
-		# crossover
-			father = genetic_samples[2*index]
-			mother = genetic_samples[2*index+1]
-			kid1, kid2 = self.crossover(father, mother)
+			if num_samples >= int(np.sum(self.good_samples)+0.001):
+				num_samples = int(np.sum(self.good_samples)+0.001)
+				num_samples = num_samples - np.mod(num_samples, 2)
+				genetic_samples = self.all_samples[self.good_samples][:num_samples]
+			else:
+				inds = np.where(self.good_samples)[0]
+				probs = (self.all_scores[self.good_samples] - np.min(self.all_scores[self.good_samples]))
+				avg_good_scores = np.mean(probs)
+				probs = probs + avg_good_scores
+				if np.sum(probs)==0:
+					probs = np.ones_like(probs)
+				choices = np.random.choice(inds, size=num_samples, replace=False, p=probs/np.sum(probs))
+				genetic_samples = np.asarray([self.all_samples[c] for c in choices])
+				
+			new_samples = []
+			while len(new_samples) < num_samples:
+				idx1, idx2 = np.random.choice(num_samples, size=2, replace=False)
+				father, mother = genetic_samples[idx1], genetic_samples[idx2]
+				kid1, kid2 = self.crossover(father, mother)
+				#----------------- mutation
+				kid1 = self.mutate(kid1)
+				kid2 = self.mutate(kid2)
 
-			#----------------- mutation
-			kid1 = self.mutate(kid1)
-			kid2 = self.mutate(kid2)
-			genetic_samples[2*index] = kid1
-			genetic_samples[2*index+1] = kid2
+				if self.constraint_fn(kid1):
+					new_samples.append(kid1)
+				if self.constraint_fn(kid2):
+					new_samples.append(kid2)
+			genetic_samples = np.asarray(new_samples[:num_samples])
 
-		return genetic_samples, None
+		if verbose:
+			print('sampled %d uniformly, %d with genetic'%(len(random_samples), num_samples))
+		
+		origins_random = ['U'] * len(random_samples)
+		origins_genetic = ['G'] * len(genetic_samples)
+		origins = origins_random + origins_genetic
+				
+		sample_vectors = np.concatenate((random_samples, genetic_samples))
+		
+		sample_vectors, indices = np.unique(sample_vectors, axis=0, return_index=True)
+		origins = [origins[i] for i in indices]
+		while len(sample_vectors) < num_samples:
+			count = num_samples - len(sample_vectors)
+			print(f'adding {count} more random samples')
+			sample_vectors = np.concatenate((sample_vectors, self.sample_uniform(num_samples=count)))
+			origins += ['U'] * count
+			sample_vectors, indices = np.unique(sample_vectors, axis=0, return_index=True)
+			origins = [origins[i] for i in indices]
+
+		return sample_vectors, origins
 
 
 class Gaussian_sampler(AdaNS_sampler):
-	def __init__(self, boundaries, minimum_num_good_samples, u_random_portion=0.2, local_portion=0.4, cross_portion=0.4, pair_selection_method='random'):
+	def __init__(self, boundaries, constraint_fn, minimum_num_good_samples, u_random_portion=0.2, local_portion=0.4, cross_portion=0.4, pair_selection_method='random'):
 		'''
 			- u_random_portion: ratio of samples taken uniformly from the entire space
 			- local_portion: ratio of samples taken from gaussian distributions using the "local" method
@@ -429,7 +489,7 @@ class Gaussian_sampler(AdaNS_sampler):
 			- pair_selection_method: how to select pairs for cross samples. Options: ['random','top_scores','top_and_nearest','top_and_furthest','top_and_random']
 		'''
 
-		super(Gaussian_sampler, self).__init__(boundaries, minimum_num_good_samples)
+		super(Gaussian_sampler, self).__init__(boundaries=boundaries, constraint_fn=constraint_fn, minimum_num_good_samples=minimum_num_good_samples)
 
 		# for each sample, specifies how it was created: 'U':uniformly 'L':gaussian local, 'C':gaussian cross
 		self.origins = []
@@ -467,7 +527,7 @@ class Gaussian_sampler(AdaNS_sampler):
 		function to sample from the search-space
 			- num_samples: number of samples to take
 		'''
-		if num_samples==0:
+		if num_samples == 0:
 			return np.zeros((0, self.dimensions)).astype(np.int32), []
 
 		data = self.all_samples[self.good_samples]
@@ -498,11 +558,20 @@ class Gaussian_sampler(AdaNS_sampler):
 			else:
 				gaussian_mix.weights_ = scores/np.sum(scores)
 
-			if local_sampling>0:
-				local_samples  = gaussian_mix.sample(n_samples=local_sampling)[0]
-				local_samples  = np.clip(local_samples, self.boundaries[:,0], self.boundaries[:,1])
+			if local_sampling > 0:
+				local_samples = np.asarray([]).reshape(0, self.dimensions)
+				while len(local_samples) < local_sampling:
+					count = local_sampling - len(local_samples)
+					new_samples  = gaussian_mix.sample(n_samples=count)[0]
+					new_samples  = np.clip(local_samples, self.boundaries[:,0], self.boundaries[:,1])
+					
+					constraint_check = np.asarray(list(map(self.constraint_fn, new_samples)))
+					new_samples = new_samples[np.where(constraint_check)[0]]
+					local_samples = np.concatenate((local_samples, new_samples))
+			
 			else:
 				local_samples = np.zeros((0, self.dimensions))
+		
 		except:
 			local_samples  = self.sample_uniform(num_samples=local_sampling)
 
@@ -511,7 +580,7 @@ class Gaussian_sampler(AdaNS_sampler):
 		cross_sampling = cross_sampling + np.mod(cross_sampling, 2)
 	
 		cross_samples = np.zeros((0, self.dimensions))
-		if cross_sampling>0:
+		if cross_sampling > 0:
 			pairs = self.get_pairs(num_pairs=cross_sampling)
 			for pair in pairs:
 				father = self.all_samples[pair[0]]
@@ -519,8 +588,13 @@ class Gaussian_sampler(AdaNS_sampler):
 				gauss_mean = (father + mother)/2.0
 				gauss_cov = (np.absolute(father-mother)/2.0)**2
 				gauss_cov = np.diag(gauss_cov)
-				sample = np.random.multivariate_normal(gauss_mean, gauss_cov)
-				sample = np.clip(sample, self.boundaries[:,0], self.boundaries[:,1])
+				
+				constraint_check = False
+				while constraint_check is False:
+					sample = np.random.multivariate_normal(gauss_mean, gauss_cov)
+					sample = np.clip(sample, self.boundaries[:,0], self.boundaries[:,1])
+					constraint_check = self.constraint_fn(sample)
+				
 				sample = np.expand_dims(sample, axis=0)
 				cross_samples = np.append(cross_samples, sample, axis=0)				
 
@@ -654,8 +728,8 @@ class Gaussian_sampler(AdaNS_sampler):
 
 class Zoom_sampler(AdaNS_sampler):
 	# zoom
-	def __init__(self, boundaries, minimum_num_good_samples):
-		super(Zoom_sampler, self).__init__(boundaries, minimum_num_good_samples)
+	def __init__(self, boundaries, constraint_fn, minimum_num_good_samples):
+		super(Zoom_sampler, self).__init__(boundaries=boundaries, constraint_fn=constraint_fn, minimum_num_good_samples=minimum_num_good_samples)
 		
 		self.num_regions = 1
 		self.region_ids = np.zeros(0)
@@ -718,7 +792,15 @@ class Zoom_sampler(AdaNS_sampler):
 			- per_regions_samples: number of samples to take from each region
 		'''
 		ids = np.asarray([np.ones(per_regions_samples)*i for i in range(self.num_regions)]).astype(np.int32).ravel()
-		sample_vectors = np.asarray([self.id_to_vector(i, self.starts[i], self.ends[i]) for i in ids])
+		
+		sample_vectors = []
+		for i in ids:
+			new_sample = self.id_to_vector(i, self.starts[i], self.ends[i])
+			while self.constraint_fn(new_sample) is False:
+				new_sample = self.id_to_vector(i, self.starts[i], self.ends[i])
+			sample_vectors.append(new_sample)
+		sample_vectors = np.asarray(sample_vectors)
+		
 		origins = np.zeros(len(ids)).astype(np.int32)
 		return sample_vectors, ids
 
@@ -730,14 +812,21 @@ class Zoom_sampler(AdaNS_sampler):
 		'''
 		
 		indices = np.arange(0, self.num_regions)
-		if num_samples==0:
+		if num_samples == 0:
 			return np.zeros((0, self.dimensions)).astype(np.int32)
 
 		# Choose samples from good regions with non-uniform density
 		probs = self.per_region_sampling_probs/np.sum(self.per_region_sampling_probs)
 		region_ids = np.random.choice(indices, size=num_samples, replace=True, p=probs)
-		sample_vectors = np.asarray([self.id_to_vector(i, self.starts[i], self.ends[i]) for i in region_ids])
-		
+
+		sample_vectors = []
+		for i in region_ids:
+			new_sample = self.id_to_vector(i, self.starts[i], self.ends[i])
+			while self.constraint_fn(new_sample) is False:
+				new_sample = self.id_to_vector(i, self.starts[i], self.ends[i])
+			sample_vectors.append(new_sample)
+		sample_vectors = np.asarray(sample_vectors)
+
 		return sample_vectors, region_ids
 
 
@@ -848,7 +937,7 @@ class Zoom_sampler(AdaNS_sampler):
 
 
 	def run_sampling(self, evaluator, num_samples, n_iter, minimize=False, alpha_max=1.0, early_stopping=np.Infinity, 
-		save_path='./sampling', n_parallel=1, plot_contour=False, executor=mp.Pool, verbose=True):
+		save_path='./sampling', n_parallel=1, plot_contour=False, executor=mp.Pool, verbose=True, init_samples=None):
 		'''
 		Function to maximize given black-box function and save results to ./sampling/
 			- evaluator : the objective function to be minimized
@@ -917,9 +1006,13 @@ class Zoom_sampler(AdaNS_sampler):
 			
 			# the inner loop is executed until a region has too many good samples, then the loop breaks and that region is cut in half
 			while True:
-				if iteration==0:
+				if iteration == 0:
 					starting_iter = True
-					samples, ids = self.sample_from_all_regions(num_samples)
+					if init_samples is None:
+						samples, ids = self.sample_from_all_regions(num_samples)
+					else:
+						samples = init_samples
+						ids = np.asarray([np.ones(num_samples)*i for i in range(self.num_regions)]).astype(np.int32).ravel()
 					prev_max_score = self.max_score
 				else:
 					starting_iter = False
